@@ -1,4 +1,4 @@
-/*Basic software to run the Lexus GS450H hybrid transmission and inverter using the open source V1 controller
+  /*Basic software to run the Lexus GS450H hybrid transmission and inverter using the open source V1 controller
  * Take an analog throttle signal and converts to a torque command to MG1 and MG2
  * Feedback provided over USB serial
  * V3 Reverse added
@@ -50,6 +50,8 @@
 #define TransPB2    43
 #define TransPB3    42
 
+// #define HVPreset    400 //voltage at which to enable main contactor
+
 #define HVPreset    20 //voltage at which to enable main contactor
 
 #define OilpumpTemp A7
@@ -67,17 +69,23 @@ byte mthCnt;
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 CAN_FRAME outframe;  //A structured variable according to due_can library for transmitting CAN data.
 
+
+
+/*
 byte get_gear()
 {
-  if(digitalRead(IN1))
+  if(!digitalRead(IN1))
   {
-    return(DRIVE);
-  }else if (digitalRead(IN2)){
-    return(REVERSE);
-  }else{
-    return(NEUTRAL);
+  return(DRIVE);
+  }
+  else
+  {
+  return(REVERSE); 
   }
 }
+*/
+
+
 
 Metro timer_htm=Metro(10); 
 Metro timer_diag = Metro(1100);
@@ -96,7 +104,7 @@ unsigned long  last_packet=0;
             
 volatile byte mth_byte=0;
 
-float isa_dc_bus_voltage=0, dc_bus_voltage=0,temp_inv_water=0,temp_inv_inductor=0; //just used for diagnostic output
+float dc_bus_voltage=0,temp_inv_water=0,temp_inv_inductor=0; //just used for diagnostic output
 
 short mg1_torque=0,
       mg2_torque=0,
@@ -104,22 +112,17 @@ short mg1_torque=0,
       mg2_speed=-1;
        
 byte inv_status=1;
-//     gear=get_gear(); //get this from your transmission
+     //gear=get_gear(); //get this from your transmission
      
 bool htm_sent=0, 
      mth_good=0;
 
-//int oil_power=135; //oil pump pwm value
-int oil_power=100; //oil pump pwm value
+int oil_power=135; //oil pump pwm value
 
 //Throttle Pedal Configuration
 int ThrotlLow = 160; // 75 is the default
 int ThrotlHi = 520;  // 370 is the default
 int ThrotlMargin = 5; //dead zone at start of throttle travel
-
-//default is 3500
-static int16_t MaxTrq=3500;  //max torque request
-static int16_t MinTrq = MaxTrq*-1;
 
 int Throt1Pin = A0; //throttle pedal analog inputs
 int Throt2Pin = A1;
@@ -127,7 +130,7 @@ int ThrotVal=0; //value read from throttle pedal analog input
 bool T15Status; //flag to keep status of Terminal 15 from CAS via CAN.
 bool dash_status; //flag for dash on can command.
 bool can_status;  //flag for turning off and on can sending.
-     
+
 
 
 short get_torque()
@@ -135,8 +138,8 @@ short get_torque()
   //accelerator pedal mapping to torque values here
   ThrotVal=analogRead(Throt1Pin);
   if (ThrotVal<(ThrotlLow+5)) ThrotVal=ThrotlLow;//dead zone at start of throttle travel
-  if(gear==DRIVE) {ThrotVal = map(ThrotVal, ThrotlLow, ThrotlHi, 0, MaxTrq);}
-  else if(gear==REVERSE) {ThrotVal = map(ThrotVal, ThrotlLow, ThrotlHi, 0,MinTrq);}
+  if(gear==DRIVE) {ThrotVal = map(ThrotVal, ThrotlLow, ThrotlHi, 0, 3500);}
+  else if(gear==REVERSE) {ThrotVal = map(ThrotVal, ThrotlLow, ThrotlHi, 0, -3500);}
   else if(gear==PARK) {ThrotVal = 0;}  //no torque in park or neutral
   else if(gear==NEUTRAL) {ThrotVal = 0;}  //no torque in park or neutral
   return ThrotVal; //return torque
@@ -149,12 +152,10 @@ ISA Sensor;  //Instantiate ISA Module Sensor object to measure current and volta
 
 void setup() {
 
-  SerialDEBUG.print("Setting Up");
-
    Can0.begin(CAN_BPS_500K);  //CAN bus for V2. Use for isa shunt comms etc
    Can1.begin(CAN_BPS_500K);  //CAN bus for communication with E65 PT CAN
-   Can1.watchForRange(0x130, 0x192);  // only receive messages from 0x130 to 0x192
-  // Can1.attachCANInterrupt(Incoming); // SK Stop processing data from CAN 1 until i've got the rx8 dash set up.
+  // Can1.watchForRange(0x130, 0x192);  // only receive messages from 0x130 to 0x192
+  // Can1.attachCANInterrupt(Incoming); //
 
     Sensor.begin(0,500);  //Start ISA object on CAN 0 at 500 kbps
    
@@ -173,8 +174,8 @@ void setup() {
   digitalWrite(pin_inv_req, 1);
   pinMode(13, OUTPUT);  //led
   pinMode(OilPumpPower, OUTPUT);  //Oil pump control relay- being used to control HV precharge contactor as not required seperate oil pump power control.
-  digitalWrite(OilPumpPower,LOW);  //turn off precharge
-  //analogWrite(OilPumpPWM,125);  //set 50% pwm to oil pump at 1khz for testing
+  digitalWrite(OilPumpPower, LOW);  //turn off precharge
+   //analogWrite(OilPumpPWM,125);  //set 50% pwm to oil pump at 1khz for testing
 
   pinMode(InvPower, OUTPUT);  //Inverter Relay 
   pinMode(Out1, OUTPUT);  //GP output one
@@ -209,6 +210,7 @@ void setup() {
   htm_data[66]=((27500)>>8);
  
   SerialDEBUG.begin(115200);
+  SerialDEBUG.print("hello world!");
 
   Serial2.begin(19200); //setup serial 3 for wifi access
 }
@@ -217,23 +219,40 @@ void setup() {
 
 void HV_On()
 {
-if (dash_status==true || IN1==HIGH) //if we turn on the car or call for hv for charging then turn on hv
+  SerialDEBUG.print("Dash Status: ");
+  SerialDEBUG.println(dash_status);
+  SerialDEBUG.print("IN1");
+  SerialDEBUG.println(digitalRead(IN1));
+  if (digitalRead(IN1)==HIGH) //if we turn on the car or call for hv for charging then turn on hv
   {
-digitalWrite(OilPumpPower,HIGH);  //turn on hv precharge and pack split contactors
-
-  if (isa_dc_bus_voltage>HVPreset)
-{
-digitalWrite(Out1,HIGH);  //turn on hv main once precharge complete
-}
+      SerialDEBUG.print("Precharge ON. Voltage:");
+      SerialDEBUG.println(dc_bus_voltage);
+      
+      digitalWrite(OilPumpPower,HIGH);  //turn on hv precharge and pack split contactors
   
+      if (dc_bus_voltage>HVPreset)
+      {  
+        SerialDEBUG.println("HV On");
+        digitalWrite(Out1,HIGH);  //turn on hv main once precharge complete
+      }else{
+        SerialDEBUG.println("HV Off");
+      }
+  }
+  else
+  {
+    SerialDEBUG.println("Precharge OFF");
+    SerialDEBUG.println("HV Off");
   }
   
 }
 
 void HV_Off()
 {
-  digitalWrite(Out1,LOW);  //turn of hv main contactor
-  digitalWrite(OilPumpPower,LOW);  //turn of hv precharge and pack split contactors 
+SerialDEBUG.println("Turning HV OFF");
+
+digitalWrite(Out1,LOW);  //turn off hv main contactor
+digitalWrite(OilPumpPower,LOW);  //turn off hv precharge and pack split contactors
+ 
 }
 
 
@@ -264,7 +283,7 @@ v100,i200,p35,m3000,n4000,o20,r100,q50*
 //digitalWrite(13,!digitalRead(13));//blink led every time we fire this interrrupt.
 
 Serial2.print("v");//dc bus voltage
-Serial2.print(isa_dc_bus_voltage);
+Serial2.print(dc_bus_voltage);
 Serial2.print(",i");//dc current
 Serial2.print(Sensor.Amperes);//current derived from ISA shunt
 Serial2.print(",p");//total motor power
@@ -302,11 +321,9 @@ void control_inverter() {
       mg1_speed=mth_data[6]|mth_data[7]<<8;
       mg2_speed=mth_data[31]|mth_data[32]<<8;
     }
-    gear=get_gear();
+    //gear=get_gear();
     mg2_torque=get_torque(); // -3500 (reverse) to 3500 (forward)
     mg1_torque=((mg2_torque*5)/4);
-    //SerialDEBUG.print("MG1 Torque: "); SerialDEBUG.println(mg1_torque);
-    //SerialDEBUG.print("MG2 Torque: "); SerialDEBUG.println(mg2_torque);
     if((mg2_speed>MG2MAXSPEED)||(mg2_speed<-MG2MAXSPEED))mg2_torque=0;
     if(gear==REVERSE)mg1_torque=0;
 
@@ -401,10 +418,7 @@ void diag_mth()
   SerialDEBUG.print("MTH Valid: ");if(mth_good)SerialDEBUG.print("Yes"); else SerialDEBUG.print("No");SerialDEBUG.print("\tChecksum: ");SerialDEBUG.print(mth_checksum);
   SerialDEBUG.print("\n");
   
-  SerialDEBUG.print("ISA DC Bus: ");if(isa_dc_bus_voltage>=0)SerialDEBUG.print(isa_dc_bus_voltage);else SerialDEBUG.print(isa_dc_bus_voltage);
-  SerialDEBUG.print("v\n");
-
-  SerialDEBUG.print("Inverter DC Bus: ");if(dc_bus_voltage>=0)SerialDEBUG.print(dc_bus_voltage);else SerialDEBUG.print(dc_bus_voltage);
+  SerialDEBUG.print("DC Bus: ");if(dc_bus_voltage>=0)SerialDEBUG.print(dc_bus_voltage);else SerialDEBUG.print("----");
   SerialDEBUG.print("v\n");
  
   SerialDEBUG.print("MG1 - Speed: ");SerialDEBUG.print(mg1_speed);
@@ -420,15 +434,6 @@ void diag_mth()
   SerialDEBUG.print("c\nAnother Temp:\t");SerialDEBUG.print(mth_data[88]|mth_data[89]<<8);
   SerialDEBUG.print("c\nAnother Temp:\t");SerialDEBUG.print(mth_data[41]|mth_data[40]<<8);
   SerialDEBUG.print("c\n");
-  
-  SerialDEBUG.print("Gear: ");
-  if (gear == DRIVE){
-    SerialDEBUG.println("Drive");
-  }else if (gear == REVERSE){
-    SerialDEBUG.println("Reverse");
-  }else {
-    SerialDEBUG.println("Neutral");
-  }
   
   SerialDEBUG.print("\n");
   SerialDEBUG.print("\n");
@@ -624,28 +629,8 @@ digitalWrite(13,!digitalRead(13));//blink led every time we fire this interrrupt
 
 void loop() {
 
-  //Get the voltage frmo the ISA shunt
-  isa_dc_bus_voltage = Sensor.Voltage3;
-  
-/*this is a hack to get around the t15 status check */
-  if (digitalRead(IN1) || digitalRead(IN2))
-  {
-    T15Status=true;
-    can_status=true;
-  }else{
-    if (T15Status == true){
-      //Display an 'off' message once.
-      SerialDEBUG.println("Turning Off.");
-    }
-    T15Status=false;
-    can_status=false;
-  }
-
-  /* end of my hack */
-
   if((T15Status==true) && (dash_status==false)) //fire the dash wake up on T15 set to on but do only once.
   {
-    
     DashOn();
     dash_status=true;
     digitalWrite(InvPower,HIGH);  //turn on inverter, oil pump and pas pump
@@ -660,6 +645,8 @@ void loop() {
     analogWrite(OilPumpPWM,0);  //set 0 pwm to shutdown
     can_status=false;
     digitalWrite(InvPower,LOW);  //turn off inverter, oil pump and pas pump
+
+      
     }
   
   control_inverter();
@@ -667,12 +654,10 @@ void loop() {
   Frames200MS();
   if(timer_diag.check())
   {
-   if (T15Status==true){
-      diag_mth();
-    }
+  diag_mth();
   handle_wifi();
   HV_On(); //check if we need hv
-
+  
 // SerialDEBUG.println(ThrotVal);
  //  SerialDEBUG.println(gear);
  // digitalWrite(13,!digitalRead(13));
